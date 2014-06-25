@@ -106,44 +106,68 @@ exports.Lexer = class Lexer
     idLength = id.length
     poppedToken = undefined
 
+    # This if handles "for own key, value of myObject", loop over keys and values of obj, ignoring proptotype
     if id is 'own' and @tag() is 'FOR'
       @token 'OWN', id
       return id.length
+
+    # colon will be truthy if the identifier ended in a single colon, which is
+    # how you define object members in object literal (json) format.
+    # In that case, we set "forcedIdentifier" to true. It means, "damn it, this is an identifier, I'm sure of it."
+    # But forcedIdentifier can ALSO be true if the previous token was ".", "?.", :: or ?::
+    # OR, it can be true if the previos token was NOT SPACED and it is "@". All that makes sense.
     forcedIdentifier = colon or
       (prev = last @tokens) and (prev[0] in ['.', '?.', '::', '?::'] or
       not prev.spaced and prev[0] is '@')
     tag = 'IDENTIFIER'
 
+    # only do this if it is nOT forcedIdentifier. See if the identifier is in JS_KEYWORDS or COFFEE_KEYWORDS
     if not forcedIdentifier and (id in JS_KEYWORDS or id in COFFEE_KEYWORDS)
       tag = id.toUpperCase()
+      # if we're using WHEN, and the previous tag was LINE_BREAK, then this is a LEADING_WHEN token.
       if tag is 'WHEN' and @tag() in LINE_BREAK
         tag = 'LEADING_WHEN'
-      else if tag is 'FOR'
+      else if tag is 'FOR' # just make a note we've seen FOR.
         @seenFor = yes
-      else if tag is 'UNLESS'
+      else if tag is 'UNLESS' # UNLESS is turned into an IF token
         tag = 'IF'
-      else if tag in UNARY
+      else if tag in UNARY # meaning, tag is "~" or "!
         tag = 'UNARY'
-      else if tag in RELATION
+      else if tag in RELATION # meaning, IN, OF, or INSTANCEOF
         if tag isnt 'INSTANCEOF' and @seenFor
+          # tag could be "FORIN" or "FOROF" ()
+          # but note, @seenFor is a CLASS variable. So we're REMEMBERING that context across many tokens. So, FOR ... IN and FOR ... OF
+          # Yech, i hate the way that's handled.
           tag = 'FOR' + tag
           @seenFor = no
         else
-          tag = 'RELATION'
+          # here, it could be IN, OF, or INSTANCEOF, and @seenFor was not true.
+          tag = 'RELATION' # so all uses of IN, OF and INSTANCEOF outside of FOR are considered RELATIONS.
+          # @value() is another function for peeking at the previous token, but it gets the VALUE of that token. So it the value
+          # was "!", pop that token off! Change our ID to "!IN", "!FOR" or "!INSTANCEOF" (note, that's our VALUE, not our TAG)
+          # so he is merely consolidating the 2 tags into one.
           if @value() is '!'
             poppedToken = @tokens.pop()
             id = '!' + id
 
+    # if id is one of the js or cs reserved words (and a few others), but forcedIndentifier is true, label it an an identifier.
+    # otherwise, if it is RESERVED, error out.
     if id in JS_FORBIDDEN
       if forcedIdentifier
         tag = 'IDENTIFIER'
         id  = new String id
         id.reserved = yes
       else if id in RESERVED
+        # you can get here if forcedIdentifier is NOT TRUE, and the id is in RESERVED.
         @error "reserved word \"#{id}\""
+        # if forcedIdentifier is FALSE, and the id IS in JS_FORBIDDEN, but NOT in RESERVED, you'll keep going. Those possibilities
+        # are: JS_KEYWORDS and STRICT_PROSCRIBED, so things like "true, false, typeof" or "eval, arguments"
 
+    # continuing with the case above, if you are using one of the reserved words, and forcedIdentifier is false, go inside this block
     unless forcedIdentifier
+      # change id to the coffee alias (resolve the coffee alias) if it is one of those
       id  = COFFEE_ALIAS_MAP[id] if id in COFFEE_ALIASES
+      # handle these cases here for some crazy reason.
       tag = switch id
         when '!'                 then 'UNARY'
         when '==', '!='          then 'COMPARE'
@@ -152,14 +176,17 @@ exports.Lexer = class Lexer
         when 'break', 'continue' then 'STATEMENT'
         else  tag
 
+    # now, we make a token using the tag we have chosen.
     tagToken = @token tag, id, 0, idLength
     if poppedToken
+      # if he previously consolidated 2 tokens, lets correct the location data to encompass the span of both of them
       [tagToken[2].first_line, tagToken[2].first_column] =
         [poppedToken[2].first_line, poppedToken[2].first_column]
     if colon
       colonOffset = input.lastIndexOf ':'
-      @token ':', ':', colonOffset, colon.length
+      @token ':', ':', colonOffset, colon.length # The colon token is a *separate* token! ok, but it fucks up my mental model.
 
+    # As always, we return the length
     input.length
 
   # Matches numbers, including decimals, hex, and exponential notation.

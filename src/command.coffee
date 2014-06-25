@@ -65,10 +65,13 @@ optionParser = null
 # `--` will be passed verbatim to your script as arguments in `process.argv`
 exports.run = ->
   parseOptions()
-  # Make the REPL *CLI* use the global context so as to (a) be consistent with the 
+  # Make the REPL *CLI* use the global context so as to (a) be consistent with the
   # `node` REPL CLI and, therefore, (b) make packages that modify native prototypes
   # (such as 'colors' and 'sugar') work as expected.
   replCliOpts = useGlobal: yes
+
+  debugger # todo charlie remove
+
   return forkNode()                             if opts.nodejs
   return usage()                                if opts.help
   return version()                              if opts.version
