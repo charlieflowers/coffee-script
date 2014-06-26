@@ -164,10 +164,11 @@ exports.Lexer = class Lexer
         # are: JS_KEYWORDS and STRICT_PROSCRIBED, so things like "true, false, typeof" or "eval, arguments"
 
     # continuing with the case above, if you are using one of the reserved words, and forcedIdentifier is false, go inside this block
+    # but also, of course, if you're not even using a reserved work and forcedIdentifier is false.
     unless forcedIdentifier
       # change id to the coffee alias (resolve the coffee alias) if it is one of those
       id  = COFFEE_ALIAS_MAP[id] if id in COFFEE_ALIASES
-      # handle these cases here for some crazy reason.
+      # handle these cases here because they were created by alias resolution!
       tag = switch id
         when '!'                 then 'UNARY'
         when '==', '!='          then 'COMPARE'
