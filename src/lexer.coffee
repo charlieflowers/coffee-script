@@ -107,6 +107,7 @@ exports.Lexer = class Lexer
     poppedToken = undefined
 
     # This if handles "for own key, value of myObject", loop over keys and values of obj, ignoring proptotype
+    # If previous token's tag was 'FOR' and this is 'OWN', then make a token called 'OWN'
     if id is 'own' and @tag() is 'FOR'
       @token 'OWN', id
       return id.length
@@ -118,7 +119,7 @@ exports.Lexer = class Lexer
     # OR, it can be true if the previos token was NOT SPACED and it is "@". All that makes sense.
     forcedIdentifier = colon or
       (prev = last @tokens) and (prev[0] in ['.', '?.', '::', '?::'] or
-      not prev.spaced and prev[0] is '@')
+      not prev.spaced and prev[0] is '@') # if the previous token was "@" and there is no space between(?)
     tag = 'IDENTIFIER'
 
     # only do this if it is nOT forcedIdentifier. See if the identifier is in JS_KEYWORDS or COFFEE_KEYWORDS
@@ -127,7 +128,7 @@ exports.Lexer = class Lexer
       # if we're using WHEN, and the previous tag was LINE_BREAK, then this is a LEADING_WHEN token.
       if tag is 'WHEN' and @tag() in LINE_BREAK
         tag = 'LEADING_WHEN'
-      else if tag is 'FOR' # just make a note we've seen FOR.
+      else if tag is 'FOR' # just make a note we've seen FOR. in a CLASS VAR, so it outlives this stack frame.
         @seenFor = yes
       else if tag is 'UNLESS' # UNLESS is turned into an IF token
         tag = 'IF'
