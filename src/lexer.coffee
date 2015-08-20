@@ -216,7 +216,16 @@ exports.Lexer = class Lexer
   # are balanced within the string's contents, and within nested interpolations.
   stringToken: ->
     switch quote = @chunk.charAt 0
+      # when 1st char is single quote, match SIMPLESTR.
+      # The [string] = syntax uses destructuring. It means, expect the rhs to be an
+      # array of 1 item, and set string to that one item. If the regex match returns
+      # undefined, then default to an empty array, meaning string will be undefined.
       when "'" then [string] = SIMPLESTR.exec(@chunk) || []
+      # when the first char is double quotes, call @balancedString on the chunk,
+      # passing in a double quote.
+      #
+      # The interesting thing here is that he supports strings within interpolated strings within interpolated strings, ad infinitum, as long as things are balanced. I need to see an example of that.
+      #
       when '"' then string = @balancedString @chunk, '"'
     return 0 unless string
     trimmed = @removeNewlines string[1...-1]
@@ -334,32 +343,86 @@ exports.Lexer = class Lexer
   # Keeps track of the level of indentation, because a single outdent token
   # can close multiple indents, so we need to know how far in we happen to be.
   lineToken: ->
+    # if the next token is not \n, then return 0
     return 0 unless match = MULTI_DENT.exec @chunk
-    indent = match[0]
+    # the regex captures at least one of "newline plus trailing whitespace stopping at nonwhitespace or next newline."
+    # so: /n <space> <tab> <space> /n /n <space> /n /n would ALL be matched. And match[0] would contain that entire string. (match[0] is all this fn uses).
+    #
+    indent = match[0] # now indent = the full matched text
     @seenFor = no
-    size = indent.length - 1 - indent.lastIndexOf '\n'
-    noNewlines = @unfinished()
-    if size - @indebt is @indent
-      if noNewlines then @suppressNewlines() else @newlineToken 0
-      return indent.length
+    size = indent.length - 1 - indent.lastIndexOf '\n' # size, for my example, would be 9 - 1 - 8 = zero! And that makes sense, because I DID do some indenting in there, but
+    #  that indenting was "covered up" by subsequent newlines that did not re-state that indenting. You could treat it as indent if you wanted, but it would be followed immediately
+    #  by enough OUTDENTS to cancel it out. So makes sense to ignore them. Just get the amount of whitespace I put after the LAST newline.
 
-    if size > @indent
+    # now, consider the case of: \n <space> <tab> <space> \n \n <space> \n \n <space> <tab> (I added <space> and <tab> to end of previous example)
+    # size would now be 11 - 1 - 8 = 2, which is due to the 2 whitespace charas i have on the end!
+
+    noNewlines = @unfinished() # certain expressions are ended by newline (such as comments). If we're in one of these, noNewLines will now be true.
+
+    # why would the amount of TRAILING WHITESPACE *AFTER* a newline be relevant or important? Well, DUH! If it is AFTER a newline, then it is ON THE NEXT LINE!!!!
+    # So this whitespace is whitespace AT THE START OF A NEW LINE.
+  #
+  # So what are these class variables?
+  # 1) @indent: Set to zero at the entry point, it is labelled as "the current indent level"
+  # 2) @indebt: Set to 0 at entry, it is labelled as "the overindentation at the current point". But WTF does that mean?
+    if size - @indebt is @indent
+      console.log "Branch 1: size - @indebt is @indent, indentation was kept same"
+      # @token 'HERECOMMENT', 'HERECOMMENT', 0, 0
+      # WARNING!!! "@indent" is NOT THE SAME AS "indent"!!!
+      # WARNING!!! "@indebt" is different too!
+
+      # So, if the amount of whitespace on the new line minus @indebt == @indent, then we are going to make a token
+      # The normal case is that token will be a newlineToken(0). But if we're inside one of those "unfinished" expressions, it will be @suppressNewLines.
+      # @newlineToken is a fn that usually makes a TERMINATOR token. But it won't if the last token is ALREADY a TERMINATOR. And it pops off all the ";" tokens first.
+      #
+      # BUT: if noNewLines is true (which means we're in one of those "unfinished" expressions), then DON'T call newlineToken and DON'T make a TERMINATOR.
+      # Instead, call suppressNewlines, which says, if the last token was a \, then just consume that \, and don't create a newline token. The \ means the coder wants to
+      # suppress a newline. If the last token was not \, we won't pop a token, and we won't make a TERMINATOR token either. So it is as if there was no newline there.
+      # I suspect these "unfinished" tokens are things that are allowed to span many lines. Let's see ... //, LOGIC, +, etc.
       if noNewlines
+        console.log "Branch 1.1: noNewLines is true, so suppressNewLines"
+        @suppressNewlines()
+      else
+        console.log "Branch 1.2: newNoewLines is false, so add a newlineToken (aka TERMINATOR)
+        @newlineToken 0
+        return indent.length
+
+    console.log "Branch 2: indentation is not kept same"
+
+    # Next case: if the new indentation is > the current indent level, then we have indented further.
+    if size > @indent
+      console.log "Branch 3: size of new indent is > previous indent, we've indented further"
+      if noNewlines
+        console.log "Branch 3.1: noNewLines is true, so suppressNewLines"
+        # if this is one of those unfinished expressions, change the INDEBT to the amount that the new whitespace exceeds the current indent level
         @indebt = size - @indent
+        # then, suppressNewlines and return
         @suppressNewlines()
         return indent.length
+
+      # but if we're NOT in one of those unfinished expressions, then ...
+      # if there are no tokens lexed yet, set the baseIndent and indent to the amount of whitespace found.
+      console.log "Branch 3.2: noNewLines is false"
       unless @tokens.length
+        console.log "Branch 3.3: there are not any tokens yet, so set base indent and don't return any token"
         @baseIndent = @indent = size
+        # And don't return any token.
         return indent.length
-      diff = size - @indent + @outdebt
+
+      console.log "Branch 3.4: there are some tokens already, so make an INDENT token"
+      diff = size - @indent + @outdebt # ugh!! Next step is to see what @outdebt is. But it has become clear to me that I will do multiple passes, and my FIRST pass will be WHAT'S REALLY IN THE FILE!
+        # shit. outdebt is defined as the "underoutdentation of the current line". What in the holy fuck does that mean?
       @token 'INDENT', diff, indent.length - size, size
       @indents.push diff
       @ends.push 'OUTDENT'
       @outdebt = @indebt = 0
       @indent = size
     else if size < @baseIndent
+      console.log "Branch 4: size is not greater than @indent, and size is < @baseIndent. This is ERROR, missing identation"
       @error 'missing indentation', indent.length
     else
+      console.log "Branch 5: size is not > @indent, and size is not < @baseIndent. Make an OUTDENT token"
+      # understanding this branch. size <= @indent, meaning we have outdented. But we did not outdent too far to make error, so create outdent
       @indebt = 0
       @outdentToken @indent - size, noNewlines, indent.length
     indent.length
@@ -405,6 +468,9 @@ exports.Lexer = class Lexer
     if match then match[0].length else 0
 
   # Generate a newline token. Consecutive newlines get merged together.
+  # crf newlineToken: While the last token in the token array is ";", pop. So, remove all the semicolon tokens at the end of the token array.
+  # If the previously paresed tag was TERMINATOR, do NOTHING! Otherwise, create a TERMINATOR token whose value is \n at the offset passed in
+  #  and a length of 0.
   newlineToken: (offset) ->
     @tokens.pop() while @value() is ';'
     @token 'TERMINATOR', '\n', offset, 0 unless @tag() is 'TERMINATOR'
@@ -508,6 +574,8 @@ exports.Lexer = class Lexer
   # a series of delimiters, all of which must be nested correctly within the
   # contents of the string. This method allows us to have strings within
   # interpolations within strings, ad infinitum.
+  #
+  # crf balancedString
   balancedString: (str, end) ->
     continueCount = 0
     stack = [end]
@@ -695,16 +763,24 @@ exports.Lexer = class Lexer
   # not specified, the length of `value` will be used.
   #
   # Returns the new token.
+  # crf token
   token: (tag, value, offsetInChunk, length, origin) ->
     token = @makeToken tag, value, offsetInChunk, length
     token.origin = origin if origin
     @tokens.push token
     token
 
+  # crf tag:
+  # Find the last token that was parsed (unless you pass an index), and either return its TAG field, or set its TAG field.
   # Peek at a tag in the current token stream.
   tag: (index, tag) ->
     (tok = last @tokens, index) and if tag then tok[0] = tag else tok[0]
 
+  # crf value
+  # This is a helper that is usually called as a getter, but can also be called as a "setter". To call it as a getter, call with no args, as in foo = @value();
+  # It will call "last" on the tokens array. "last" is the 4th helper from helpers.coffee. It gets the tail element of the array.
+  # # So, as a getter, this gets the last token from the tokens array and returns its tok[1]. tok[1] is the "value" field of the token (a token is [tag, value, locationData])
+  # as a "setter", it changes the "value" field of the last token.
   # Peek at a value in the current token stream.
   value: (index, val) ->
     (tok = last @tokens, index) and if val then tok[1] = val else tok[1]
